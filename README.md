@@ -28,6 +28,8 @@ pip install PySimpleGUI
 An example of what it will look like when you have signed in is:
 ![PySimpleGUI Example](pyGUI.png)
 
+***NOTE: This is currently in development and will cause errors if you attempt to use it right now***
+
 ### Other Libraries
 All other libraries used are standard python libraries and do not require installation. The libraries used are:
 - os
