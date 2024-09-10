@@ -1,5 +1,5 @@
 import sqlite3
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 import challonge
 import os
 import datetime
@@ -7,7 +7,9 @@ import json
 import pandas as pd
 from credentials import userID, apiKey
 
-mmc: int = 103
+mmc: int = 105
+playerRaces: Dict[str,List[str]] = dict() # for being able to reference a players race/offrace when inputing match data. List has main race first and offrace second
+participantID: Dict[str, str] = dict() # for quick referencing a player name with their ID
 
 def connect(dbName: str="mmc.db") -> sqlite3.Connection:
     return sqlite3.connect(dbName)
@@ -155,22 +157,25 @@ def insertData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
         # load participant data
         partsData = json.loads(file.read())
         
-        # check if the player is in the database yet
+        # enter participant data
+        print("Entering participant data")
         for p in partsData:
             try:
                 name = p["name"]
                 # get data from names csv                
                 namesData = namesFile[namesFile["Name"] == name]
                 ind: int = namesData.index[0]
-                normalName = namesData["Normal Name"][ind]
-                
+                normalName = namesFile["Normal Name"][ind]
+                playerRaces[name] = [namesFile["Race"][ind], namesFile["OffRace"][ind]]
+                participantID[str(p["id"])] = name
+
                 # insert data into ChallongeNames
                 c.execute("SELECT * FROM ChallongeNames WHERE CNAME = ?", (name,))
                 results = c.fetchall()
                 # if the results are empty, we need to add that person into the table
                 if len(results) == 0:               
                     # entry for ChallongeNames
-                    cnames = (str(namesData["Name"][ind]), str(namesData["Normal Name"][ind]))
+                    cnames = (str(namesFile["Name"][ind]), str(namesFile["Normal Name"][ind]))
                     c.executemany("INSERT INTO ChallongeNames VALUES (?,?)", (cnames,))
                     conn.commit()
                 
@@ -195,9 +200,11 @@ def insertData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
                     conn.commit()
             except:
                 print(f"{name} was not added")
-                
+        print("Finished entering participant data")
+    
     # data to be pulled from matches file
     with open(f"MMC/mmc{mmc}/matches.json", "r") as file:
+        print("Entering Match Data")
         matchesData = json.loads(file.read())
         # things for MMC table
         tournamentID = str(matchesData[0]["tournament_id"])
@@ -207,29 +214,35 @@ def insertData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
         
         # go through each match and add it to the table
         for m in matchesData:
-            skip = False
-            matchID: str = str(m["id"])
-            # make sure that the match doesn't already exist before doing more work
-            c.execute("SELECT * FROM Matches WHERE MATCHID = ?", (matchID,))
-            results = c.fetchall()
-            if len(results) == 0:
-                winnerID: str = str(m["winner_id"])
-                loserID: str = str(m["loser_id"])
-                winnerScore, loserScore = scoreFix(m["scores_csv"])
-                if winnerScore == -2:
-                    print(m["scores_csv"])
-                    skip = True
-                mRound: int = int(m["round"])
-                if rounds < mRound:
-                    rounds = mRound
-                if mRound < 0:
-                    elim = "d"
-                # if it is a legit match, add it
-                if not skip:
-                    match = (matchID, tournamentID, winnerID, loserID, winnerScore, loserScore, mRound, "NULL", "NULL")
-                    c.executemany("INSERT INTO Matches VALUES (?,?,?,?,?,?,?,?,?)", (match,))
-                    conn.commit()                 
-            
+            if m["state"] == "complete":
+                skip = False
+                matchID: str = str(m["id"])
+                # make sure that the match doesn't already exist before doing more work
+                c.execute("SELECT * FROM Matches WHERE MATCHID = ?", (matchID,))
+                results = c.fetchall()
+                if len(results) == 0:
+                    winnerID: str = str(m["winner_id"])
+                    loserID: str = str(m["loser_id"])
+                    winnerName: str = str(participantID[winnerID])
+                    loserName: str = str(participantID[loserID])
+                    winnerRace: str = str(playerRaces[winnerName][0])
+                    loserRace: str = str(playerRaces[loserName][0])
+                    winnerScore, loserScore = scoreFix(m["scores_csv"])
+                    if winnerScore == -2:
+                        print(m["scores_csv"])
+                        skip = True
+                    mRound: int = int(m["round"])
+                    if rounds < mRound:
+                        rounds = mRound
+                    if mRound < 0:
+                        elim = "d"
+                    # if it is a legit match, add it
+                    if not skip:
+                        match = (matchID, tournamentID, winnerID, loserID, winnerScore, loserScore, mRound, winnerRace, loserRace)
+                        c.executemany("INSERT INTO Matches VALUES (?,?,?,?,?,?,?,?,?)", (match,))
+                        conn.commit()                 
+        print("Finished entering match data")
+
         # check if there is already an entry for this MMC
         c.execute("SELECT * FROM MMC WHERE NUMBER = ?", (mmc,))
         results = c.fetchall()
@@ -238,7 +251,7 @@ def insertData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
             edition = (tournamentID, mmc, elim, rounds, date)
             c.executemany("INSERT INTO MMC VALUES (?,?,?,?,?)", (edition,))
             conn.commit()
-
+    
     return
 
 def main() -> None:
@@ -248,10 +261,14 @@ def main() -> None:
     c: sqlite3.Cursor = conn.cursor()
 
     # add the MMC to pull data for
+    print("Pulling MMC Data")
     pullMMCData()
+    print("Finished Pulling MMC Data")
     
     # check for new challonge usernames
+    print("Checking for new names")
     newChallongeNames(c, conn)
+    print("Finished checking for new names")
     
     # insert new data
     insertData(c, conn)

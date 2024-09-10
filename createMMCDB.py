@@ -12,7 +12,9 @@ challongeNames: List[Tuple] = [] # for storing player challonge name tuples to b
 mmc: List[Tuple] = [] # for storing the mmc tuples to be put into the MMC table in mmc.db
 participants: List[Tuple] = [] # for storing the participant tuples to be put into the Participants table in mmc.db
 matches: List[Tuple] = [] # for storing the matches tuples to be put into the Matches table in mmc.db
-numOfMMC: int = 99 # the number of MMC's that have happend. Last updated June 8, 2024
+numOfMMC: int = 104 # the number of MMC's that have happend. Last updated September 10, 2024
+playerRaces: Dict[str,List[str]] = dict() # for being able to reference a players race/offrace when inputing match data. List has main race first and offrace second
+participantID: Dict[str, str] = dict() # for quick referencing a player name with their ID
 
 def connect(dbName: str="mmc.db") -> sqlite3.Connection:
     """
@@ -78,6 +80,7 @@ def createTables(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     :param c: an sqlite cursor object
     :param conn: an sqlite connection object
     """
+    print("Creating Tables")
     # string for Player table specs
     playerTable: str =  """
                         CREATE TABLE IF NOT EXISTS Player(
@@ -167,6 +170,7 @@ def createTables(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     except:
         print("Matches table did not create properly")
     
+    print("Finished Creating Tables")
     return
 
 def preparePlayerData(names: pd.DataFrame) -> None:
@@ -175,6 +179,7 @@ def preparePlayerData(names: pd.DataFrame) -> None:
     Also prepare data for attaching a players standarized name with their challonge username(s)
     :param names: a pandas dataframe that holds everyones name info
     """
+    print("Preparing Player Data")
     # keep track of which players have been seen so that no one is added multiple times
     playersSeen: Set[str] = set()
     # go through each name
@@ -187,7 +192,10 @@ def preparePlayerData(names: pd.DataFrame) -> None:
             playersSeen.add(names["Normal Name"][ind])
             newPlayer: Tuple[str] = (str(names["Normal Name"][ind]), str(names["Race"][ind]), str(names["Country"][ind]), str(names["Team"][ind]), str(names["OffRace"][ind]))
             players.append(newPlayer)
+        # update the playerRaces dict
+        playerRaces[names["Name"][ind]] = [names["Race"][ind],names["OffRace"]]
 
+    print("Finished Preparing Player Data")
     return
 
 def preparePartsData(partsData) -> None:
@@ -196,13 +204,20 @@ def preparePartsData(partsData) -> None:
     Data is being read from the participants.json files in the MMC folder
     :param partsData: a json loads object holding the participants.json data
     """
+    print("Preparing Participant Data")
     # go through each participant from the tournament being looked at
     for participant in partsData:
         # not every "participant" checked in. The ones who did have a final rank, so this if statement filters out anyone who signed up but didn't check in
         if participant["final_rank"]:
             person: Tuple[str] = (str(participant["id"]), str(participant["name"]), str(participant["challonge_user_id"]), str(participant["tournament_id"]))
             participants.append(person)
-
+        # save id with name
+        try:
+            participantID[str(participant["id"])] = participant["name"]
+        except:
+            continue
+    
+    print("Finished Preparing Participant Data")
     return
 
 def prepareMatchData(matchesData) -> Tuple[str, int]:
@@ -213,31 +228,38 @@ def prepareMatchData(matchesData) -> Tuple[str, int]:
     :returns: a tuple of 1 string and 1 integer, the string being the elimination style (single or double) 
     and the integer being the number of rounds the tournament had
     """
+    print("Preparing Match Data")
     rounds = 0 # for keeping track of how many rounds were in the tournament
     elim = "s" # to indicate the elimination style, default is s (single), but could be changed to d (double)
     # go through every match
     for match in matchesData:
-        skip = False # sometimes a match is not played or needed but is still included in the data. This turns true if one of those matches is encountered
-        matchID: str = str(match["id"])
-        tournamentID: str = str(match["tournament_id"])
-        winnerID: str = str(match["winner_id"])
-        loserID: str = str(match["loser_id"])
-        # use the scoreFix function to standardize the score as challonge is funny with how scores are recorded
-        winnerScore, loserScore = scoreFix(match["scores_csv"])
-        # if a fake match is found, winnerScore is set to -2 to indicate it should not be added to the Matches table
-        if winnerScore == -2:
-            skip = True
-        mRound: int = int(match["round"])
-        # check to see if the current match that's being looked at is the highest round match or not
-        if rounds < mRound:
-            rounds = mRound
-        # loser bracket rounds are labeled as a negative, so if a negative round is encountered, we know this tournament was double elim
-        if mRound < 0:
-            elim = "d"
-        # add the match to the matches list
-        if not skip:
-            matches.append((matchID, tournamentID, winnerID, loserID, winnerScore, loserScore, mRound, "NULL", "NULL"))
+        if match["state"] == "complete":
+            skip = False # sometimes a match is not played or needed but is still included in the data. This turns true if one of those matches is encountered
+            matchID: str = str(match["id"])
+            tournamentID: str = str(match["tournament_id"])
+            winnerID: str = str(match["winner_id"])
+            loserID: str = str(match["loser_id"])
+            winnerName: str = str(participantID[winnerID])
+            loserName: str = str(participantID[loserID])
+            winnerRace: str = str(playerRaces[winnerName][0])
+            loserRace: str = str(playerRaces[loserName][0])
+            # use the scoreFix function to standardize the score as challonge is funny with how scores are recorded
+            winnerScore, loserScore = scoreFix(match["scores_csv"])
+            # if a fake match is found, winnerScore is set to -2 to indicate it should not be added to the Matches table
+            if winnerScore == -2:
+                skip = True
+            mRound: int = int(match["round"])
+            # check to see if the current match that's being looked at is the highest round match or not
+            if rounds < mRound:
+                rounds = mRound
+            # loser bracket rounds are labeled as a negative, so if a negative round is encountered, we know this tournament was double elim
+            if mRound < 0:
+                elim = "d"
+            # add the match to the matches list
+            if not skip:
+                matches.append((matchID, tournamentID, winnerID, loserID, winnerScore, loserScore, mRound, winnerRace, loserRace))
 
+    print("Finished Preparing Match Data")
     return elim, rounds
 
 def insertPlayerData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
@@ -246,10 +268,12 @@ def insertPlayerData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     :param c: sqlite cursor
     :param conn: sqlite connection
     """
+    print("Inserting Player Data")
     # attempt to add the prepared data into the Player table
     try:
         c.executemany("INSERT INTO Player VALUES (?,?,?,?,?)", players)
         conn.commit()
+        print("Finished Inserting Player Data")
     # if there was an error, indicate there was an error inserting this data specifically so a solution can be found
     except:
         print("Inserting Player data didn't work")
@@ -261,10 +285,12 @@ def insertMMCData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     :param c: sqlite cursor
     :param conn: sqlite connection
     """
+    print("Inserting MMC Data")
     # attempt to add the prepared data into the MMC table
     try:
         c.executemany("INSERT INTO MMC VALUES (?,?,?,?,?)", mmc)
         conn.commit()
+        print("Finished inserting MMC Data")
     # if there was an error, indicate there was an error inserting this data specifically so a solution can be found
     except:    
         print("Inserting MMC data didn't work")
@@ -276,10 +302,12 @@ def insertChallongeNameData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None
     :param c: sqlite cursor
     :param conn: sqlite connection
     """
+    print("Inserting Challonge Name Data")
     # attempt to add the prepared data into the MMC table
     try:
         c.executemany("INSERT INTO ChallongeNames VALUES (?,?)", challongeNames)
         conn.commit()
+        print("Finished Inserting Challonge Name Data")
     # if there was an error, indicate there was an error inserting this data specifically so a solution can be found
     except:
         print("Inserting Challonge Name data didn't work")
@@ -291,10 +319,12 @@ def insertPartsData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     :param c: sqlite cursor
     :param conn: sqlite connection
     """
+    print("Inserting Participants Data")
     # attempt to add the prepared data into the Participants table
     try:
         c.executemany("INSERT INTO Participants VALUES (?,?,?,?)", participants)
         conn.commit()
+        print("Finished Inserting Participants Data")
     # if there was an error, indicate there was an error inserting this data specifically so a solution can be found
     except:
         print("Inserting Participants data didn't work")
@@ -306,10 +336,12 @@ def insertMatchData(c: sqlite3.Cursor, conn: sqlite3.Connection) -> None:
     :param c: sqlite cursor
     :param conn: sqlite connection
     """
+    print("Inserting Match Data")
     # attempt to add the prepared data into the Matches table
     try:
         c.executemany("INSERT INTO Matches VALUES (?,?,?,?,?,?,?,?,?)", matches)
         conn.commit()
+        print("Finished Inserting Match Data")
     # if there was an error, indicate there was an error inserting this data specifically so a solution can be found
     except:
         print("Inserting Match data did not work")
@@ -388,6 +420,7 @@ def main() -> None:
         
         # input data from MMC's
         for edition in range(1, numOfMMC + 1):
+            print(edition)
             # load data from json files
             matchesFile = open(f"MMC/mmc{edition}/matches.json", "r")
             matchesData = json.loads(matchesFile.read())
