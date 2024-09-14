@@ -7,7 +7,7 @@ import json
 import pandas as pd
 from credentials import userID, apiKey
 
-mmc: int = 105
+mmc: int = 106
 playerRaces: Dict[str,List[str]] = dict() # for being able to reference a players race/offrace when inputing match data. List has main race first and offrace second
 participantID: Dict[str, str] = dict() # for quick referencing a player name with their ID
 
